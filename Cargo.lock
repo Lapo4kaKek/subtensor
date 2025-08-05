@@ -6764,6 +6764,7 @@ dependencies = [
  "futures",
  "hex",
  "jsonrpsee 0.24.9",
+ "log",
  "memmap2 0.9.7",
  "node-subtensor-runtime",
  "num-traits",

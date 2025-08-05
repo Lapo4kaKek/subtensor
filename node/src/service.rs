@@ -9,6 +9,7 @@ use sc_consensus::{
 };
 use sc_consensus_grandpa::BlockNumberOps;
 use sc_consensus_slots::BackoffAuthoringOnFinalizedHeadLagging;
+use sc_network::NetworkStatusProvider;
 use sc_network::config::SyncMode;
 use sc_network_sync::strategy::warp::{WarpSyncConfig, WarpSyncProvider};
 use sc_service::{Configuration, PartialComponents, TaskManager, error::Error as ServiceError};
@@ -32,6 +33,7 @@ use crate::ethereum::{
     StorageOverride, StorageOverrideHandler, db_config_dir, new_frontier_partial,
     spawn_frontier_tasks,
 };
+use log::{debug, info};
 
 /// The minimum period of blocks on which justifications will be
 /// imported and generated.
@@ -339,6 +341,7 @@ pub fn build_manual_seal_import_queue(
     ))
 }
 
+
 /// Builds a new service for a full client.
 pub async fn new_full<NB>(
     mut config: Configuration,
@@ -375,6 +378,25 @@ where
         other: (mut telemetry, block_import, grandpa_link, frontier_backend, storage_override),
     } = new_partial(&config, &eth_config, build_import_queue)?;
 
+    use sc_service::TransactionPool;
+    use futures::StreamExt;
+    {
+        let mut notif_stream = transaction_pool.import_notification_stream();
+        let pool_for_log = transaction_pool.clone();
+
+        task_manager
+        .spawn_essential_handle()
+        .spawn("txpool-sniffer", None, async move {
+            while let Some(tx_hash) = notif_stream.next().await {
+                let s = pool_for_log.status();
+                log::info!(target: "txpool",
+                    "new tx {:?} | ready={} future={}",
+                    tx_hash,
+                    s.ready, s.future);
+            }
+        });
+        
+    }
     let FrontierPartialComponents {
         filter_pool,
         fee_history_cache,
@@ -636,6 +658,9 @@ where
             log::info!("Manual Seal Ready");
             return Ok(task_manager);
         }
+        use sc_service::TransactionPool;
+        let st = transaction_pool.status();
+        info!(target: "txpool", "tx‑pool: {:?}  (before proposer)", st);
 
         let proposer_factory = sc_basic_authorship::ProposerFactory::new(
             task_manager.spawn_handle(),
@@ -646,6 +671,7 @@ where
         );
 
         let slot_duration = sc_consensus_aura::slot_duration(&*client)?;
+        log::info!("Slot duration:{:?}", slot_duration);
         let create_inherent_data_providers = move |_, ()| async move {
             let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
             let slot = sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
